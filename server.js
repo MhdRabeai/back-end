@@ -3,10 +3,13 @@ const http = require("http");
 const cors = require("cors");
 const fs = require("node:fs/promises");
 const bodyParser = require("body-parser");
-
+const cookieParser = require("cookie-parser");
 const app = express();
+const path = require("path");
+const dotenv = require("dotenv").config();
+const { v4: uuidv4 } = require("uuid");
 const server = http.createServer(app);
-
+const { generateAccessToken } = require("./config/function");
 const io = require("socket.io")(server, {
   pingTimeout: 60000,
   cors: {
@@ -15,18 +18,37 @@ const io = require("socket.io")(server, {
     credentials: true,
   },
 });
+var jwt = require("jsonwebtoken");
+const multer = require("multer");
 
-app.use(cors());
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "uploads/");
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(
+      null,
+      file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname)
+    );
+  },
+});
+const upload = multer({ storage: storage });
+
+app.use(express.urlencoded({ extended: false }));
+app.use(
+  cors({
+    origin: "http://localhost:3000",
+    credentials: true,
+  })
+);
+app.use(cookieParser());
 app.use(express.json());
 app.use(bodyParser.json());
 
 const users = {};
 const rooms = {};
 const userDataFile = "./users.json";
-app.get("/connected-users", (req, res) => {
-  res.json({ connectedUsers: Object.keys(users) });
-});
-
 io.on("connection", (socket) => {
   console.log("User connected:", socket);
   socket.on("login", (phone) => {
@@ -108,38 +130,103 @@ io.on("connection", (socket) => {
     }
   });
 });
+const Auth = async (req, res, next) => {
+  const token = req.cookies["access_token"];
+  if (token == null) return res.sendStatus(401);
+  jwt.verify(token, process.env.TOKEN_SECRET, (err, user) => {
+    if (err) {
+      return res.sendStatus(403);
+    }
+    req.user = user;
+    console.log("Auth req.user", req.user);
+    next();
+  });
+};
+app.get("/", Auth, async (req, res) => {
+  const data = await fs.readFile(userDataFile, { encoding: "utf8" });
 
-app.post("/register", async (req, res) => {
+  const user = JSON.parse(data).find((ele) => ele.phone === req.user["phone"]);
+  return res.send(JSON.stringify(user));
+});
+app.get("/download/:filename", (req, res) => {
+  const filename = req.params.filename;
+  const filePath = path.join(__dirname, "uploads", filename);
+
+  res.download(filePath, (err) => {
+    if (err) {
+      res.setHeader("error", "File not found");
+      return res.status(404).send("File not found");
+    }
+  });
+});
+app.get("/connected-users", Auth, (req, res) => {
+  return res.json({ connectedUsers: Object.keys(users) });
+});
+
+app.post("/register", upload.single("myfile"), async (req, res) => {
+  const myData = {};
+  const { name, password, phone } = req.body;
+  Object.assign(myData, {
+    id: uuidv4(),
+    name: name,
+    password: password,
+    phone: phone,
+    messages: [
+      {
+        from: "",
+        to: "",
+        message: "",
+        time: "",
+      },
+    ],
+    avatar: req.file?.filename,
+  });
   try {
-    const { phone, password } = req.body;
     const data = await fs.readFile(userDataFile, { encoding: "utf8" });
 
     if (JSON.parse(data).some((ele) => ele["phone"] === phone)) {
+      console.log(
+        "req.body",
+        JSON.parse(data).some((ele) => ele["phone"] === phone)
+      );
       return res.status(400).json({ error: "User already exists" });
     } else {
-      const allData = JSON.parse(data);
-      allData.push({ phone: phone, password: password });
-      await fs.writeFile(userDataFile, JSON.stringify(allData));
-      res.json({ message: `User ${phone} registered successfully.` });
+      // const allData = JSON.parse(data);
+      // allData.push({ phone: phone, password: password });
+      var obj = JSON.parse(data);
+      obj.push(myData);
+      const allData = JSON.stringify(obj, null, 3);
+      await fs.writeFile(userDataFile, allData);
+      return res.json({ message: `User ${phone} registered successfully.` });
     }
   } catch (err) {
-    res.status(500).json({ error: "An error occurred while registering" });
+    return res
+      .status(500)
+      .json({ error: "An error occurred while registering" });
   }
 });
 
 app.post("/login", async (req, res) => {
   const { phone, password } = req.body;
-  const data = await fs.readFile(userDataFile, { encoding: "utf8" });
-
-  if (
-    !JSON.parse(data).some(
-      (ele) => ele["phone"] === phone && ele["password"] === password
-    )
-  ) {
-    return res.status(401).json({ error: "Invalid credentials" });
-  } else {
+  try {
+    const data = await fs.readFile(userDataFile, { encoding: "utf8" });
+    const user = await JSON.parse(data).find(
+      (ele) => ele.phone === phone && ele.password === password
+    );
+    if (!user) {
+      return res.status(404).send("Invalid UserData ");
+    }
+    const accessToken = generateAccessToken({
+      phone: user.phone,
+    });
+    res.cookie("access_token", accessToken, {
+      httpOnly: true,
+      secure: true,
+    });
     io.emit("login", phone);
-    res.status(200).json({ message: `User ${phone} logged in.` });
+    return res.sendStatus(200);
+  } catch (err) {
+    return res.sendStatus(400);
   }
 });
 
@@ -172,7 +259,7 @@ app.post("/message-send/:from/:to", async (req, res) => {
     sender.messages.push(messageObject);
     receiver.messages.push(messageObject);
     await fs.writeFile(userDataFile, JSON.stringify(user));
-    res.status(200).json({ message: "Message sent successfully" });
+    return res.status(200).json({ message: "Message sent successfully" });
   } else {
     return res.status(404).json({ error: "Recipient not connected" });
   }
@@ -187,13 +274,12 @@ app.get("/messages/:userPhone", async (req, res) => {
     const user = allUsers.find((ele) => ele["phone"] === userPhone);
 
     if (user) {
-      res.status(200).json({ messages: user.messages });
+      return res.status(200).json({ messages: user.messages });
     } else {
-      res.status(404).json({ error: "User not found" });
+      return res.status(404).json({ error: "User not found" });
     }
   } catch (err) {
-    console.error(err);
-    res
+    return res
       .status(500)
       .json({ error: "An error occurred while fetching messages" });
   }
@@ -209,13 +295,12 @@ app.get("/messages/:userPhone/:phoneTo", async (req, res) => {
       .find((ele) => ele["phone"] === userPhone)
       ["messages"].filter((e) => e["from"] == phoneTo || e["to"] == phoneTo);
     if (user) {
-      res.status(200).json({ messages: user });
+      return res.status(200).json({ messages: user });
     } else {
-      res.status(404).json({ error: "User not found" });
+      return res.status(404).json({ error: "User not found" });
     }
   } catch (err) {
-    console.error(err);
-    res
+    return res
       .status(500)
       .json({ error: "An error occurred while fetching messages" });
   }
@@ -224,12 +309,15 @@ app.post("/logout", (req, res) => {
   const { phone } = req.body;
 
   if (users[phone]) {
+    res.cookie("access_token", "", { maxAge: 0 });
     delete users[phone];
     // socket.broadcast.emit("userDisconnected", phone);
     io.emit("userDisconnected", phone);
-    res.status(200).json({ message: `User ${phone} logged out successfully.` });
+    return res
+      .status(200)
+      .json({ message: `User ${phone} logged out successfully.` });
   } else {
-    res.status(404).json({ error: "User not found" });
+    return res.status(404).json({ error: "User not found" });
   }
 });
 server.listen(4000, () => {
