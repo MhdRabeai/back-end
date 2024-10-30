@@ -45,12 +45,12 @@ app.use(
 app.use(cookieParser());
 app.use(express.json());
 app.use(bodyParser.json());
-
+app.use("/static", express.static(path.join(__dirname, "uploads")));
 const users = {};
 const rooms = {};
 const userDataFile = "./users.json";
 io.on("connection", (socket) => {
-  console.log("User connected:", socket);
+  // console.log("User connected:", socket);
   socket.on("login", (phone) => {
     socket.broadcast.emit("userConnected", phone);
     users[phone] = socket.id;
@@ -138,13 +138,12 @@ const Auth = async (req, res, next) => {
       return res.sendStatus(403);
     }
     req.user = user;
-    console.log("Auth req.user", req.user);
+    // console.log("Auth req.user", req.user);
     next();
   });
 };
 app.get("/", Auth, async (req, res) => {
   const data = await fs.readFile(userDataFile, { encoding: "utf8" });
-
   const user = JSON.parse(data).find((ele) => ele.phone === req.user["phone"]);
   return res.send(JSON.stringify(user));
 });
@@ -159,8 +158,26 @@ app.get("/download/:filename", (req, res) => {
     }
   });
 });
-app.get("/connected-users", Auth, (req, res) => {
-  return res.json({ connectedUsers: Object.keys(users) });
+app.get("/connected-users", Auth, async (req, res) => {
+  // const data = await fs.readFile(userDataFile, { encoding: "utf8" });
+  // const userKeys = Object.keys(users);
+
+  // return res.json({ connectedUsers: userDetails });
+  const data = await fs.readFile(userDataFile, { encoding: "utf8" });
+  const fileData = JSON.parse(data);
+  const keys = Object.keys(users);
+  const connectedUsers = keys
+    .map((key) => {
+      const user = fileData.find((user) => user.phone === key);
+      if (user) {
+        return {
+          ...user,
+        };
+      }
+      return null;
+    })
+    .filter((user) => user !== null);
+  return res.json({ connectedUsers: connectedUsers });
 });
 
 app.post("/register", upload.single("myfile"), async (req, res) => {
