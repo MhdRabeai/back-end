@@ -159,10 +159,6 @@ app.get("/download/:filename", (req, res) => {
   });
 });
 app.get("/connected-users", Auth, async (req, res) => {
-  // const data = await fs.readFile(userDataFile, { encoding: "utf8" });
-  // const userKeys = Object.keys(users);
-
-  // return res.json({ connectedUsers: userDetails });
   const data = await fs.readFile(userDataFile, { encoding: "utf8" });
   const fileData = JSON.parse(data);
   const keys = Object.keys(users);
@@ -289,16 +285,33 @@ app.get("/messages/:userPhone", async (req, res) => {
     const allUsers = JSON.parse(data);
 
     const user = allUsers.find((ele) => ele["phone"] === userPhone);
-
     if (user) {
-      return res.status(200).json({ messages: user.messages });
+      const arr = user["messages"]
+        .map((ele) => ele["from"])
+        .concat(user.messages.map((ele) => ele["to"]));
+      const keys = [...new Set(arr)].filter((ele) => ele !== userPhone);
+
+      const Chats = keys
+        .map((key) => {
+          const user = allUsers.find((user) => user.phone === key);
+          if (user) {
+            return {
+              ...user,
+            };
+          }
+          return null;
+        })
+        .filter((user) => user !== null);
+
+      return res.status(200).json({ chats: Chats });
     } else {
       return res.status(404).json({ error: "User not found" });
     }
   } catch (err) {
-    return res
-      .status(500)
-      .json({ error: "An error occurred while fetching messages" });
+    console.log(err);
+    // return res
+    //   .status(500)
+    //   .json({ error: "An error occurred while fetching messages" });
   }
 });
 
