@@ -50,13 +50,13 @@ const users = {};
 const rooms = {};
 const userDataFile = "./users.json";
 io.on("connection", (socket) => {
-  // console.log("User connected:", socket);
+  // console.log("User connected:", socket.id);
   socket.on("login", (phone) => {
     socket.broadcast.emit("userConnected", phone);
-    users[phone] = socket.id;
-    console.log(`User ${phone} is now connected.`);
-    console.log("Connected users:", Object.keys(users));
+    users[phone] = phone;
+    console.log(`user ${phone} in`);
   });
+
   socket.on("joinChat", ({ from, to }) => {
     if (isNaN(+from) || isNaN(+to)) {
       console.log("Invalid phone number(s) for room creation:", from, to);
@@ -123,10 +123,26 @@ io.on("connection", (socket) => {
     }
   });
   socket.on("disconnect", (phone) => {
-    if (users[phone] === socket.id) {
+    console.log("aaaaaadisconnect");
+    console.log("phone", phone);
+    console.log("users[phone]", users[phone]);
+    if (users[phone] === phone) {
+      console.log("disconnect");
       delete users[phone];
       console.log(`User disconnected: ${phone}`);
-      socket.broadcast.emit("userDisconnected", phone);
+      socket.broadcast.emit("disconnected", phone);
+    }
+  });
+  socket.on("logout", (phone) => {
+    console.log("logout", phone);
+    console.log("users", users);
+    console.log("find", users[phone]);
+    if (users[phone] === phone) {
+      console.log("done", users[phone]);
+      console.log("disconnect");
+      delete users[phone];
+      console.log(`User disconnected: ${phone}`);
+      socket.broadcast.emit("disconnected", phone);
     }
   });
 });
@@ -236,7 +252,7 @@ app.post("/login", async (req, res) => {
       httpOnly: true,
       secure: true,
     });
-    io.emit("login", phone);
+    // io.emit("login", phone);
     return res.sendStatus(200);
   } catch (err) {
     return res.sendStatus(400);
@@ -321,11 +337,12 @@ app.get("/messages/:userPhone/:phoneTo", async (req, res) => {
     const data = await fs.readFile(userDataFile, { encoding: "utf8" });
     const allUsers = JSON.parse(data);
 
-    const user = allUsers
+    const messages = allUsers
       .find((ele) => ele["phone"] === userPhone)
       ["messages"].filter((e) => e["from"] == phoneTo || e["to"] == phoneTo);
+    const user = allUsers.find((ele) => ele["phone"] === phoneTo);
     if (user) {
-      return res.status(200).json({ messages: user });
+      return res.status(200).json({ messages: messages, user: user });
     } else {
       return res.status(404).json({ error: "User not found" });
     }
@@ -337,12 +354,15 @@ app.get("/messages/:userPhone/:phoneTo", async (req, res) => {
 });
 app.post("/logout", (req, res) => {
   const { phone } = req.body;
-
+  console.log("out");
   if (users[phone]) {
     res.cookie("access_token", "", { maxAge: 0 });
-    delete users[phone];
-    // socket.broadcast.emit("userDisconnected", phone);
-    io.emit("userDisconnected", phone);
+
+    // io.emit("logout", phone);
+    // io.emit("login", phone);
+    // delete users[phone];
+    // io.emit("logout", phone);
+    // io.emit("userDisconnected", phone);
     return res
       .status(200)
       .json({ message: `User ${phone} logged out successfully.` });
